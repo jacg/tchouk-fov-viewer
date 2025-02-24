@@ -1,0 +1,1533 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Tchoukball Field Visualization</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+        #renderCanvas {
+            width: 100%;
+            height: 100%;
+            touch-action: none;
+        }
+        #controlPanel {
+            position: absolute;
+            top: 5px;
+            left: 5px;
+            background-color: rgba(255, 255, 255, 0.8);
+            padding: 10px;
+            fond-size: 0.8em;
+            border-radius: 5px;
+            font-family: Arial, sans-serif;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+        }
+        #controlPanel ul {
+            margin: 0 0 10px 0;
+            padding-left: 20px;
+            font-size: 0.8em;
+        }
+        .control-section {
+            margin-bottom: 10px;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 10px;
+        }
+        .control-section:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+        }
+        .control-section h3 {
+            margin-top: 0;
+            margin-bottom: 5px;
+            fond-size: 1em;
+        }
+        .control-group {
+            margin-bottom: 5px;
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .control-label {
+            display: inline-block;
+            width: 60px;
+            font-size: 0.9em;
+        }
+        .control-value {
+            display: inline-block;
+            width: 35px;
+            font-size: 0.9em;
+            text-align: right;
+        }
+        input[type="range"] {
+            width: 120px;
+            vertical-align: middle;
+            margin: 0 3px;
+        }
+        .key-hint {
+            font-size: 0.7 em;
+            margin-left: 3px;
+            color: #555;
+            font-size: 0.85em;
+            background: #eee;
+            padding: 2px 5px;
+            border-radius: 3px;
+            display: none; /* Hidden by default */
+        }
+        #loadingMessage {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-family: Arial, sans-serif;
+            font-size: 24px;
+        }
+        /* Style for active control mode */
+        input[type="radio"]:checked + span {
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        label {
+            margin-right: 10px;
+            display: block;
+            margin-bottom: 5px;
+        }
+        .toggle-hint {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background-color: rgba(255, 255, 255, 0.8);
+            padding: 8px 15px;
+            border-radius: 5px;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+            cursor: pointer;
+        }
+        #shareURL {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background-color: rgba(255, 255, 255, 0.8);
+            padding: 8px 15px;
+            border-radius: 5px;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+            cursor: pointer;
+        }
+        #urlPopup {
+            display: none;
+            position: absolute;
+            top: 50px;
+            right: 10px;
+            background-color: white;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+            width: 300px;
+            z-index: 1000;
+        }
+        #urlPopup input {
+            width: 100%;
+            margin-bottom: 10px;
+            padding: 5px;
+        }
+        #urlPopup button {
+            margin-right: 5px;
+            padding: 5px 10px;
+        }
+
+        /* Show keybindings based on active mode */
+        .mode-field .field-controls .key-hint,
+        .mode-camera .camera-controls .key-hint,
+        .mode-pov .pov-controls .key-hint,
+        .mode-cameraOrientation .cameraOrientation-controls .key-hint,
+        .mode-cameraFOV .cameraFOV-controls .key-hint {
+            display: inline-block;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="renderCanvas"></canvas>
+    <div id="loadingMessage">Loading Babylon.js...</div>
+    <div id="controlPanel" style="display: none;"></div>
+    <div id="toggleHint" class="toggle-hint">Press SPACE to toggle controls</div>
+    <div id="shareURL">Share URL</div>
+    <div id="urlPopup">
+        <p>Current configuration URL:</p>
+        <input type="text" id="configURL" readonly>
+        <button id="copyURL">Copy</button>
+        <button id="closePopup">Close</button>
+    </div>
+
+    <!-- Load Babylon.js core -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babylonjs/6.33.1/babylon.js"></script>
+
+    <script>
+        // Define standard control dimensions and their key mappings
+        const standardControls = {
+            horizontal: {
+                keys: {increase: "ArrowRight", decrease: "ArrowLeft"},
+                hintText: "←/→"
+            },
+            vertical: {
+                keys: {increase: "ArrowUp", decrease: "ArrowDown"},
+                hintText: "↑/↓"
+            },
+            depth: {
+                keys: {increase: "F", decrease: "B"},
+                hintText: "F/B"
+            }
+        };
+
+        // Parameter definition system with references to standard controls
+        const parameterDefinitions = [
+            // Field dimension parameters
+            {
+                id: "width",
+                group: "field",
+                label: "Width",
+                min: 15,
+                max: 25,
+                step: 0.1,
+                defaultValue: 17,
+                format: 1,
+                unit: "m",
+                control: "horizontal",
+                updateFn: "updateField"
+            },
+            {
+                id: "height",
+                group: "field",
+                label: "Height",
+                min: 0,
+                max: 7,
+                step: 0.1,
+                defaultValue: 3,
+                format: 1,
+                unit: "m",
+                control: "vertical",
+                updateFn: "updateField"
+            },
+            {
+                id: "length",
+                group: "field",
+                label: "Length",
+                min: 20,
+                max: 40,
+                step: 0.1,
+                defaultValue: 27,
+                format: 1,
+                unit: "m",
+                control: "depth",
+                updateFn: "updateField"
+            },
+
+            // Camera position parameters
+            {
+                id: "cameraX",
+                group: "camera",
+                label: "Camera X",
+                min: -5,
+                max: 10,
+                step: 0.1,
+                defaultValue: -2.5,
+                format: 1,
+                unit: "m",
+                control: "horizontal",
+                updateFn: "updateCameraPosition"
+            },
+            {
+                id: "cameraY",
+                group: "camera",
+                label: "Camera Y",
+                min: 0,
+                max: 6,
+                step: 0.1,
+                defaultValue: 3.0,
+                format: 1,
+                unit: "m",
+                control: "vertical",
+                updateFn: "updateCameraPosition"
+            },
+            {
+                id: "cameraZ",
+                group: "camera",
+                label: "Camera Z",
+                min: -5,
+                max: 20,
+                step: 0.1,
+                defaultValue: -1.5,
+                format: 1,
+                unit: "m",
+                control: "depth",
+                updateFn: "updateCameraPosition"
+            },
+
+            // Camera orientation parameters
+            {
+                id: "cameraPitch",
+                group: "cameraOrientation",
+                label: "Pitch",
+                min: -85,
+                max: 85,
+                step: 1,
+                defaultValue: -37,
+                format: 0,
+                unit: "°",
+                control: "vertical",
+                updateFn: "updateCameraOrientation",
+                toInternal: value => value * Math.PI / 180,
+                fromInternal: value => Math.round(value * 180 / Math.PI)
+            },
+            {
+                id: "cameraYaw",
+                group: "cameraOrientation",
+                label: "Yaw",
+                min:   0,
+                max: 360,
+                step: 1,
+                defaultValue: 45,
+                format: 0,
+                unit: "°",
+                control: "horizontal",
+                updateFn: "updateCameraOrientation",
+                toInternal: value => value * Math.PI / 180,
+                fromInternal: value => Math.round(value * 180 / Math.PI)
+            },
+
+            // Camera FOV parameters
+            {
+                id: "cameraHFOV",
+                group: "cameraFOV",
+                label: "Horizontal FOV",
+                min: 30,
+                max: 120,
+                step: 1,
+                defaultValue: 87,
+                format: 0,
+                unit: "°",
+                control: "horizontal",
+                updateFn: "updateCameraFOV",
+                toInternal: value => value * Math.PI / 180,
+                fromInternal: value => Math.round(value * 180 / Math.PI)
+            },
+            {
+                id: "cameraVFOV",
+                group: "cameraFOV",
+                label: "Vertical FOV",
+                min:  20,
+                max: 120,
+                step: 1,
+                defaultValue: 56,
+                format: 0,
+                unit: "°",
+                control: "vertical",
+                updateFn: "updateCameraFOV",
+                toInternal: value => value * Math.PI / 180,
+                fromInternal: value => Math.round(value * 180 / Math.PI)
+            },
+
+            // POV camera parameters
+            {
+                id: "azimuth",
+                group: "pov",
+                label: "Azimuth",
+                min:   0,
+                max: 360,
+                step: 1,
+                defaultValue: 240,
+                format: 0,
+                unit: "°",
+                control: "horizontal",
+                updateFn: "updatePOVCamera",
+                toInternal: value => value * Math.PI / 180,
+                fromInternal: value => {
+                    // Convert radians to degrees and ensure in 0-360 range
+                    const degrees = Math.round(value * 180 / Math.PI);
+                    return (degrees + 360) % 360;
+                }
+            },
+            {
+                id: "elevation",
+                group: "pov",
+                label: "Elevation",
+                min: -89,
+                max: 89,
+                step: 1,
+                defaultValue: 30,
+                format: 0,
+                unit: "°",
+                control: "vertical",
+                updateFn: "updatePOVCamera"
+            },
+            {
+                id: "radius",
+                group: "pov",
+                label: "Radius",
+                min: 5,
+                max: 100,
+                step: 1,
+                defaultValue: 50,
+                format: 0,
+                unit: "m",
+                control: "depth",
+                updateFn: "updatePOVCamera"
+            }
+        ];
+
+        // Define control modes
+        const controlModeDefinitions = [
+            {
+                id: "pov",
+                label: "POV",
+                parameterGroups: ["pov"],
+                icon: "👁️"
+            },
+            {
+                id: "camera",
+                label: "Camera Position",
+                parameterGroups: ["camera"],
+                icon: "🎥"
+            },
+            {
+                id: "cameraOrientation",
+                label: "Camera Orientation",
+                parameterGroups: ["cameraOrientation"],
+                icon: "🧭"
+            },
+            {
+                id: "cameraFOV",
+                label: "Camera FOV",
+                parameterGroups: ["cameraFOV"],
+                icon: "📐"
+            },
+            {
+                id: "field",
+                label: "Field Dimensions",
+                parameterGroups: ["field"],
+                icon: "📏"
+            },
+        ];
+
+        // Add shortcut numbers based on array position
+        controlModeDefinitions.forEach((mode, index) => {
+            mode.shortcut = String(index + 1);
+        });
+
+        // Control mode (default to the first one in the array)
+        let controlMode = controlModeDefinitions[0].id;
+
+        // Function to apply URL parameters and override defaults
+        function applyURLParameters(params) {
+            const urlParams = new URLSearchParams(window.location.search);
+            let hasOverrides = false;
+
+            // Special handling for control mode
+            if (urlParams.has("mode")) {
+                const modeParam = urlParams.get("mode");
+                const modeExists = controlModeDefinitions.some(mode => mode.id === modeParam);
+                if (modeExists) {
+                    controlMode = modeParam;
+                    hasOverrides = true;
+                }
+            }
+
+            // Iterate through all parameter definitions to check for URL overrides
+            parameterDefinitions.forEach(paramDef => {
+                const paramName = paramDef.id;
+
+                if (urlParams.has(paramName)) {
+                    // Get the value from URL and convert to appropriate type
+                    let value = urlParams.get(paramName);
+
+                    // Convert to number for numeric parameters
+                    value = parseFloat(value);
+
+                    // Skip if not a valid number
+                    if (isNaN(value)) {
+                        console.warn(`Invalid value for parameter ${paramName}: ${urlParams.get(paramName)}`);
+                        return;
+                    }
+
+                    // Apply bounds checking
+                    value = Math.min(paramDef.max, Math.max(paramDef.min, value));
+
+                    // Store the value with conversion if needed
+                    if (paramDef.toInternal) {
+                        params[paramDef.group][paramDef.id] = paramDef.toInternal(value);
+                    } else {
+                        params[paramDef.group][paramDef.id] = value;
+                    }
+
+                    hasOverrides = true;
+                }
+            });
+
+            return hasOverrides;
+        }
+
+        // Function to generate a shareable URL with current parameters
+        function generateShareableURL(params) {
+            const url = new URL(window.location.href);
+
+            // Clear existing query parameters
+            url.search = '';
+
+            // Add current control mode
+            url.searchParams.set('mode', controlMode);
+
+            // Add all current parameter values
+            parameterDefinitions.forEach(paramDef => {
+                let value;
+
+                // Get current value with conversion if needed
+                if (paramDef.fromInternal) {
+                    value = paramDef.fromInternal(params[paramDef.group][paramDef.id]);
+                } else {
+                    value = params[paramDef.group][paramDef.id];
+                }
+
+                // Format the value appropriately and add to URL
+                if (paramDef.format === 0) {
+                    url.searchParams.set(paramDef.id, Math.round(value));
+                } else {
+                    url.searchParams.set(paramDef.id, value.toFixed(paramDef.format));
+                }
+            });
+
+            return url.href;
+        }
+
+        // Initialize params object from definitions
+        function initializeParamsFromDefinitions() {
+            const params = {};
+
+            // Group parameters by their group
+            parameterDefinitions.forEach(def => {
+                if (!params[def.group]) {
+                    params[def.group] = {};
+                }
+
+                // Handle special conversions if needed
+                if (def.toInternal) {
+                    params[def.group][def.id] = def.toInternal(def.defaultValue);
+                } else {
+                    params[def.group][def.id] = def.defaultValue;
+                }
+            });
+
+            return params;
+        }
+
+        // Format parameter value based on specified precision
+        function formatParameterValue(value, format) {
+            if (format === 0) {
+                return Math.round(value);
+            } else {
+                return value.toFixed(format);
+            }
+        }
+
+        // Get key hint text for display
+        function getKeyHintText(controlType) {
+            return standardControls[controlType].hintText;
+        }
+
+        // Generate HTML for a parameter control
+        function generateParameterControlHTML(paramDef) {
+            return `
+            <div class="control-group">
+                <span class="control-label">${paramDef.label}:</span>
+                <input type="range" id="${paramDef.id}Slider"
+                       min="${paramDef.min}" max="${paramDef.max}"
+                       step="${paramDef.step}" value="${paramDef.defaultValue}">
+                <span class="control-value" id="${paramDef.id}Value">${formatParameterValue(paramDef.defaultValue, paramDef.format)}</span>
+                <span class="control-label">${paramDef.unit}</span>
+                <span class="key-hint">${getKeyHintText(paramDef.control)}</span>
+            </div>
+            `;
+        }
+
+        // Generate HTML for a control section
+        function generateControlSectionHTML(controlMode, index) {
+            const relevantGroups = controlMode.parameterGroups;
+            const relevantParams = parameterDefinitions.filter(p => relevantGroups.includes(p.group));
+
+            let html = `
+            <div class="control-section ${controlMode.id}-controls">
+                <h3>${index}. ${controlMode.icon} ${controlMode.label}</h3>
+            `;
+
+            relevantParams.forEach(param => {
+                html += generateParameterControlHTML(param);
+            });
+
+            html += `</div>`;
+            return html;
+        }
+
+        // Generate the complete control panel HTML
+        function generateControlPanelHTML() {
+            let html = `
+            <ul>
+                <li><em>SPACE: hide controls</em></li>
+                <li><em>1-5: switch modes</em></li>
+                <li><em>T: toggle opacity to highlight FOV intersection</em></li>
+                <li><em>S: share current configuration URL</em></li>
+            </ul>`;
+
+            // Use control modes in their declaration order (with index+1 as shortcut)
+            controlModeDefinitions.forEach((mode, index) => {
+                html += generateControlSectionHTML(mode, index + 1);
+            });
+
+            return html;
+        }
+
+        // Wait for DOM to load
+        window.addEventListener('DOMContentLoaded', function() {
+            // Show a loading message
+            const loadingMessage = document.getElementById('loadingMessage');
+
+            // Check if BABYLON is defined
+            if (typeof BABYLON === 'undefined') {
+                loadingMessage.textContent = 'Error: Could not load Babylon.js';
+                return;
+            }
+
+            // Initialize the 3D scene
+            initScene();
+        });
+
+        function initScene() {
+            // Hide loading message
+            document.getElementById('loadingMessage').style.display = 'none';
+
+            const canvas = document.getElementById("renderCanvas");
+            const engine = new BABYLON.Engine(canvas, true);
+            let scene;
+
+            // Initialize parameters from definitions
+            const params = initializeParamsFromDefinitions();
+
+            // Apply URL parameters if present
+            const hasURLOverrides = applyURLParameters(params);
+
+            // Generate and set control panel HTML
+            document.getElementById('controlPanel').innerHTML = generateControlPanelHTML();
+            document.getElementById('controlPanel').style.display = 'block';
+            document.getElementById('toggleHint').style.display = 'none';
+
+            // Scene elements
+            let field;
+            let fieldMaterial;
+            let isFieldTransparent = true; // Track field transparency state
+            let povCamera;
+            let cameraMesh;
+            let edgeLines = [];
+            let fieldMarkings = [];
+            let floorGridLines = [];
+            let fovVisualization = [];
+            let verticalReferenceLine;
+
+            // Rendering state
+            let needsRender = true;
+            let renderingActive = false;
+            let idleTimeout;
+
+            // Map elevation to beta angle for POV camera
+            function mapElevationToBeta(elevationDegrees) {
+                return Math.PI/2 - (elevationDegrees * Math.PI / 180);
+            }
+
+            // Create the scene
+            function createScene() {
+                const scene = new BABYLON.Scene(engine);
+                scene.autoClear = false;
+                scene.autoClearDepthAndStencil = false;
+
+                // Setup POV camera
+                povCamera = new BABYLON.ArcRotateCamera("POVCamera",
+                    params.pov.azimuth,
+                    mapElevationToBeta(params.pov.elevation),
+                    params.pov.radius,
+                    new BABYLON.Vector3(
+                        params.field.width/2,
+                        params.field.height/2,
+                        params.field.length/2
+                    ),
+                    scene);
+
+                povCamera.attachControl(canvas, true);
+                povCamera.wheelPrecision = 50;
+                povCamera.inputs.attached.keyboard.detachControl();
+
+                // Trigger rendering when camera moves
+                povCamera.onViewMatrixChangedObservable.add(() => {
+                    needsRender = true;
+                    startRenderLoop();
+                });
+
+                // Add lights
+                const light1 = new BABYLON.HemisphericLight("light1", new BABYLON.Vector3(1, 1, 0), scene);
+                light1.intensity = 0.7;
+
+                const light2 = new BABYLON.PointLight("light2",
+                    new BABYLON.Vector3(
+                        params.field.width,
+                        params.field.height*2,
+                        params.field.length
+                    ),
+                    scene);
+                light2.intensity = 0.5;
+
+                // Add ground plane with a grid texture
+                const ground = BABYLON.MeshBuilder.CreateGround("ground", {width: 1000, height: 1000}, scene);
+                const groundMaterial = new BABYLON.StandardMaterial("groundMaterial", scene);
+
+                // Create a dynamic texture for the grid
+                const gridSize = 512;
+                const gridTexture = new BABYLON.DynamicTexture("gridTexture", gridSize, scene);
+                const gridContext = gridTexture.getContext();
+
+                // Draw a grid pattern
+                gridContext.fillStyle = "#303030";
+                gridContext.fillRect(0, 0, gridSize, gridSize);
+
+                // Draw grid lines
+                for (let i = 0; i <= 10; i++) {
+                    const pos = i * (gridSize / 10);
+
+                    // Major grid lines
+                    gridContext.strokeStyle = "#606060";
+                    gridContext.lineWidth = 2;
+
+                    // Vertical lines
+                    gridContext.beginPath();
+                    gridContext.moveTo(pos, 0);
+                    gridContext.lineTo(pos, gridSize);
+                    gridContext.stroke();
+
+                    // Horizontal lines
+                    gridContext.beginPath();
+                    gridContext.moveTo(0, pos);
+                    gridContext.lineTo(gridSize, pos);
+                    gridContext.stroke();
+
+                    // Minor grid lines
+                    if (i < 10) {
+                        gridContext.strokeStyle = "#404040";
+                        gridContext.lineWidth = 1;
+
+                        for (let j = 1; j < 5; j++) {
+                            const minorPos = pos + j * (gridSize / 50);
+
+                            // Vertical lines
+                            gridContext.beginPath();
+                            gridContext.moveTo(minorPos, 0);
+                            gridContext.lineTo(minorPos, gridSize);
+                            gridContext.stroke();
+
+                            // Horizontal lines
+                            gridContext.beginPath();
+                            gridContext.moveTo(0, minorPos);
+                            gridContext.lineTo(gridSize, minorPos);
+                            gridContext.stroke();
+                        }
+                    }
+                }
+
+                gridTexture.update();
+
+                // Apply the grid texture to the ground
+                groundMaterial.diffuseTexture = gridTexture;
+                groundMaterial.specularColor = new BABYLON.Color3(0, 0, 0);
+                groundMaterial.diffuseTexture.uScale = 20;
+                groundMaterial.diffuseTexture.vScale = 20;
+                ground.material = groundMaterial;
+
+                // Create camera mesh
+                createCameraMesh(scene);
+
+                return scene;
+            }
+
+            // Toggle field opacity function
+            function toggleFieldOpacity() {
+                if (!field || !fieldMaterial) return;
+
+                isFieldTransparent = !isFieldTransparent;
+
+                if (isFieldTransparent) {
+                    fieldMaterial.alpha = 0.6; // Semi-transparent
+                } else {
+                    fieldMaterial.alpha = 1.0; // Fully opaque
+                }
+
+                needsRender = true;
+                startRenderLoop();
+            }
+
+            // Create camera mesh
+            function createCameraMesh(scene) {
+                // Create camera body
+                const cameraBody = BABYLON.MeshBuilder.CreateBox("cameraBody", {
+                    width: 0.3, height: 0.3, depth: 0.5
+                }, scene);
+
+                const cameraLens = BABYLON.MeshBuilder.CreateCylinder("cameraLens", {
+                    height: 0.4, diameterTop: 0.2, diameterBottom: 0.1, tessellation: 16
+                }, scene);
+                cameraLens.position.z = 0.45;
+
+                // Create parent container
+                const camera = new BABYLON.TransformNode("cameraContainer");
+                cameraBody.parent = camera;
+                cameraLens.parent = camera;
+
+                // Apply materials
+                const bodyMaterial = new BABYLON.StandardMaterial("bodyMaterial", scene);
+                bodyMaterial.diffuseColor = new BABYLON.Color3(0.2, 0.2, 0.2);
+                cameraBody.material = bodyMaterial;
+
+                const lensMaterial = new BABYLON.StandardMaterial("lensMaterial", scene);
+                lensMaterial.diffuseColor = new BABYLON.Color3(0.1, 0.1, 0.1);
+                cameraLens.material = lensMaterial;
+
+                // Position the camera
+                camera.position = new BABYLON.Vector3(
+                    params.camera.cameraX,
+                    params.camera.cameraY,
+                    params.camera.cameraZ
+                );
+
+                cameraMesh = camera;
+                return camera;
+            }
+
+            // Create the field
+            function createField(scene) {
+                const box = BABYLON.MeshBuilder.CreateBox("field", {
+                    width: params.field.width,
+                    depth: params.field.length,
+                    height: params.field.height
+                }, scene);
+
+                // Position with one corner at origin
+                box.position = new BABYLON.Vector3(
+                    params.field.width/2,
+                    params.field.height/2,
+                    params.field.length/2
+                );
+
+                // Semi-transparent material
+                fieldMaterial = new BABYLON.StandardMaterial("fieldMaterial", scene);
+                fieldMaterial.diffuseColor = new BABYLON.Color3(0.4, 0.6, 0.9);
+                fieldMaterial.alpha = 0.6; // Initial transparency value
+                box.material = fieldMaterial;
+
+                return box;
+            }
+
+            // Create edge lines for the field
+            function createEdgeLines(scene) {
+                // Clean up existing lines
+                edgeLines.forEach(line => {
+                    if (line) line.dispose();
+                });
+                edgeLines = [];
+
+                // Get field dimensions
+                const w = params.field.width;
+                const h = params.field.height;
+                const l = params.field.length;
+
+                // Define corners
+                const corners = [
+                    new BABYLON.Vector3(0, 0, 0),
+                    new BABYLON.Vector3(w, 0, 0),
+                    new BABYLON.Vector3(w, 0, l),
+                    new BABYLON.Vector3(0, 0, l),
+                    new BABYLON.Vector3(0, h, 0),
+                    new BABYLON.Vector3(w, h, 0),
+                    new BABYLON.Vector3(w, h, l),
+                    new BABYLON.Vector3(0, h, l)
+                ];
+
+                // Define edges as pairs of corner indices
+                const edgePairs = [
+                    [0, 1], [1, 2], [2, 3], [3, 0], // bottom
+                    [4, 5], [5, 6], [6, 7], [7, 4], // top
+                    [0, 4], [1, 5], [2, 6], [3, 7]  // vertical
+                ];
+
+                // Create lines
+                edgePairs.forEach((pair, idx) => {
+                    const line = BABYLON.MeshBuilder.CreateLines(`edge${idx}`, {
+                        points: [corners[pair[0]], corners[pair[1]]]
+                    }, scene);
+                    line.color = new BABYLON.Color3(0, 0, 0);
+                    edgeLines.push(line);
+                });
+
+                needsRender = true;
+            }
+
+            // Create field markings (halfway line and forbidden zones)
+            function createFieldMarkings(scene) {
+                // Clean up existing markings
+                fieldMarkings.forEach(marking => {
+                    if (marking) marking.dispose();
+                });
+                fieldMarkings = [];
+
+                const w = params.field.width;
+                const l = params.field.length;
+
+                // Create halfway line
+                const halfwayLine = BABYLON.MeshBuilder.CreateLines("halfwayLine", {
+                    points: [
+                        new BABYLON.Vector3(0, 0.01, l/2),
+                        new BABYLON.Vector3(w, 0.01, l/2)
+                    ]
+                }, scene);
+                halfwayLine.color = new BABYLON.Color3(1, 1, 1);
+                fieldMarkings.push(halfwayLine);
+
+                // Create forbidden zones (semicircles at both ends)
+                createForbiddenZone(0, scene);
+                createForbiddenZone(l, scene);
+
+                needsRender = true;
+            }
+
+            // Create a forbidden zone semicircle
+            function createForbiddenZone(zPosition, scene) {
+                const radius = 3;
+                const segments = 32;
+                const points = [];
+                const centerX = params.field.width / 2;
+
+                for (let i = 0; i <= segments; i++) {
+                    const startAngle = 0;
+                    const endAngle = Math.PI;
+                    const angle = startAngle + ((endAngle - startAngle) / segments) * i;
+
+                    const x = centerX + radius * Math.cos(angle);
+                    const z = zPosition + ((zPosition === 0) ? radius * Math.sin(angle) : -radius * Math.sin(angle));
+
+                    points.push(new BABYLON.Vector3(x, 0.01, z));
+                }
+
+                const forbiddenZone = BABYLON.MeshBuilder.CreateLines(`forbiddenZone${zPosition}`, {
+                    points: points
+                }, scene);
+                forbiddenZone.color = new BABYLON.Color3(1, 1, 1);
+                fieldMarkings.push(forbiddenZone);
+            }
+
+            // Create floor grid around the field
+            function createFloorGrid(scene) {
+                // Clean up existing grid
+                floorGridLines.forEach(line => {
+                    if (line) line.dispose();
+                });
+                floorGridLines = [];
+
+                const w = params.field.width;
+                const l = params.field.length;
+                const extension = 3;
+                const gridY = 0.005;
+                const gridColor = new BABYLON.Color3(0.6, 0.6, 0.6);
+
+                // Create grid on all sides of the field
+                // Left side (-X)
+                for (let x = -extension; x <= 0; x += 1) {
+                    const line = BABYLON.MeshBuilder.CreateLines(`gridLeft_${x}`, {
+                        points: [
+                            new BABYLON.Vector3(x, gridY, -extension),
+                            new BABYLON.Vector3(x, gridY, l + extension)
+                        ]
+                    }, scene);
+                    line.color = gridColor;
+                    floorGridLines.push(line);
+                }
+
+                // Right side (+X)
+                for (let x = w; x <= w + extension; x += 1) {
+                    const line = BABYLON.MeshBuilder.CreateLines(`gridRight_${x}`, {
+                        points: [
+                            new BABYLON.Vector3(x, gridY, -extension),
+                            new BABYLON.Vector3(x, gridY, l + extension)
+                        ]
+                    }, scene);
+                    line.color = gridColor;
+                    floorGridLines.push(line);
+                }
+
+                // Front side (-Z)
+                for (let z = -extension; z <= 0; z += 1) {
+                    const line = BABYLON.MeshBuilder.CreateLines(`gridFront_${z}`, {
+                        points: [
+                            new BABYLON.Vector3(-extension, gridY, z),
+                            new BABYLON.Vector3(w + extension, gridY, z)
+                        ]
+                    }, scene);
+                    line.color = gridColor;
+                    floorGridLines.push(line);
+                }
+
+                // Back side (+Z)
+                for (let z = l; z <= l + extension; z += 1) {
+                    const line = BABYLON.MeshBuilder.CreateLines(`gridBack_${z}`, {
+                        points: [
+                            new BABYLON.Vector3(-extension, gridY, z),
+                            new BABYLON.Vector3(w + extension, gridY, z)
+                        ]
+                    }, scene);
+                    line.color = gridColor;
+                    floorGridLines.push(line);
+                }
+
+                // Cross grid lines that don't intersect the field
+                for (let z = 1; z < l; z += 1) {
+                    // Left section
+                    const lineLeft = BABYLON.MeshBuilder.CreateLines(`gridCrossLeft_${z}`, {
+                        points: [
+                            new BABYLON.Vector3(-extension, gridY, z),
+                            new BABYLON.Vector3(0, gridY, z)
+                        ]
+                    }, scene);
+                    lineLeft.color = gridColor;
+                    floorGridLines.push(lineLeft);
+
+                    // Right section
+                    const lineRight = BABYLON.MeshBuilder.CreateLines(`gridCrossRight_${z}`, {
+                        points: [
+                            new BABYLON.Vector3(w, gridY, z),
+                            new BABYLON.Vector3(w + extension, gridY, z)
+                        ]
+                    }, scene);
+                    lineRight.color = gridColor;
+                    floorGridLines.push(lineRight);
+                }
+
+                for (let x = 1; x < w; x += 1) {
+                    // Front section
+                    const lineFront = BABYLON.MeshBuilder.CreateLines(`gridCrossFront_${x}`, {
+                        points: [
+                            new BABYLON.Vector3(x, gridY, -extension),
+                            new BABYLON.Vector3(x, gridY, 0)
+                        ]
+                    }, scene);
+                    lineFront.color = gridColor;
+                    floorGridLines.push(lineFront);
+
+                    // Back section
+                    const lineBack = BABYLON.MeshBuilder.CreateLines(`gridCrossBack_${x}`, {
+                        points: [
+                            new BABYLON.Vector3(x, gridY, l),
+                            new BABYLON.Vector3(x, gridY, l + extension)
+                        ]
+                    }, scene);
+                    lineBack.color = gridColor;
+                    floorGridLines.push(lineBack);
+                }
+
+                needsRender = true;
+            }
+
+            // Create and update camera FOV visualization
+            function updateCameraFOV() {
+                // Clear existing FOV visualization
+                fovVisualization.forEach(mesh => {
+                    if (mesh) mesh.dispose();
+                });
+                fovVisualization = [];
+
+                if (!cameraMesh) return;
+
+                const hFOV = params.cameraFOV.cameraHFOV;
+                const vFOV = params.cameraFOV.cameraVFOV;
+
+                // Calculate frustum
+                const distance = 100;
+                const hTan = Math.tan(hFOV / 2);
+                const vTan = Math.tan(vFOV / 2);
+
+                // Calculate frustum corners in local space (without any rotation)
+                const corners = [
+                    new BABYLON.Vector3(distance * hTan, distance * vTan, distance),     // top right
+                    new BABYLON.Vector3(-distance * hTan, distance * vTan, distance),    // top left
+                    new BABYLON.Vector3(-distance * hTan, -distance * vTan, distance),   // bottom left
+                    new BABYLON.Vector3(distance * hTan, -distance * vTan, distance)     // bottom right
+                ];
+
+                // Create a container node that will handle the rotation
+                const fovContainer = new BABYLON.TransformNode("fovContainer", scene);
+                fovContainer.parent = cameraMesh;
+                fovVisualization.push(fovContainer); // Add to visualization array for cleanup
+
+                // Create frustum lines - use the fovContainer as the parent
+                const origin = new BABYLON.Vector3(0, 0, 0);
+
+                // Edges from origin to corners
+                corners.forEach((corner, i) => {
+                    const line = BABYLON.MeshBuilder.CreateLines(`fovEdge${i}`, {
+                        points: [origin, corner]
+                    }, scene);
+                    line.color = new BABYLON.Color3(1, 0.5, 0);
+                    line.parent = fovContainer;
+                    fovVisualization.push(line);
+                });
+
+                // Connect corners to form a rectangle
+                const perimeterLine = BABYLON.MeshBuilder.CreateLines(`fovPerimeter`, {
+                    points: [corners[0], corners[1], corners[2], corners[3], corners[0]]
+                }, scene);
+                perimeterLine.color = new BABYLON.Color3(1, 0.7, 0);
+                perimeterLine.parent = fovContainer;
+                fovVisualization.push(perimeterLine);
+
+                // Create semi-transparent frustum planes
+                const createFrustumPlane = function(points, index) {
+                    const positions = [
+                        0, 0, 0,  // Origin
+                        points[0].x, points[0].y, points[0].z,
+                        points[1].x, points[1].y, points[1].z
+                    ];
+
+                    const indices = [0, 1, 2];
+
+                    const vertexData = new BABYLON.VertexData();
+                    vertexData.positions = positions;
+                    vertexData.indices = indices;
+
+                    const plane = new BABYLON.Mesh(`fovPlane${index}`, scene);
+                    vertexData.applyToMesh(plane);
+
+                    const material = new BABYLON.StandardMaterial(`fovMaterial${index}`, scene);
+                    material.diffuseColor = new BABYLON.Color3(1, 0.7, 0);
+                    material.alpha = 0.2;
+                    material.backFaceCulling = false;
+                    plane.material = material;
+
+                    plane.parent = fovContainer;
+                    fovVisualization.push(plane);
+                };
+
+                // Create the four triangular planes of the frustum
+                createFrustumPlane([corners[0], corners[1]], 0);  // Top
+                createFrustumPlane([corners[2], corners[3]], 1);  // Bottom
+                createFrustumPlane([corners[1], corners[2]], 2);  // Left
+                createFrustumPlane([corners[3], corners[0]], 3);  // Right
+
+                needsRender = true;
+                startRenderLoop();
+            }
+
+            // Update camera orientation (rotation)
+            function updateCameraOrientation() {
+                if (cameraMesh) {
+                    cameraMesh.rotation.x = - params.cameraOrientation.cameraPitch;
+                    cameraMesh.rotation.y =   params.cameraOrientation.cameraYaw;
+
+                    // Update FOV visualization if it exists
+                    if (fovVisualization.length > 0) {
+                        updateCameraFOV();
+                    }
+
+                    needsRender = true;
+                    startRenderLoop();
+                }
+            }
+
+            function updateVerticalReferenceLine() {
+                if (verticalReferenceLine) {
+                    verticalReferenceLine.dispose();
+                }
+
+                verticalReferenceLine = BABYLON.MeshBuilder.CreateLines("cameraVerticalLine", {
+                    points: [
+                        new BABYLON.Vector3(
+                            params.camera.cameraX,  // X position same as camera
+                            0,                      // Ground level (y=0)
+                            params.camera.cameraZ   // Z position same as camera
+                        ),
+                        new BABYLON.Vector3(
+                            params.camera.cameraX,  // X position same as camera
+                            params.camera.cameraY,  // Y position at camera height
+                            params.camera.cameraZ   // Z position same as camera
+                        )
+                    ]
+                }, scene);
+                verticalReferenceLine.color = new BABYLON.Color3(1, 0, 0);  // Red color
+            }
+
+            // Update camera position
+            function updateCameraPosition() {
+                if (cameraMesh) {
+                    cameraMesh.position = new BABYLON.Vector3(
+                        params.camera.cameraX,
+                        params.camera.cameraY,
+                        params.camera.cameraZ
+                    );
+
+                    // Update the vertical reference line
+                    updateVerticalReferenceLine();
+
+                    needsRender = true;
+                    startRenderLoop();
+                }
+            }
+
+            // Update POV camera
+            function updatePOVCamera() {
+                povCamera.target = new BABYLON.Vector3(
+                    params.field.width/2,
+                    params.field.height/2,
+                    params.field.length/2
+                );
+
+                povCamera.alpha = params.pov.azimuth;
+                povCamera.beta = mapElevationToBeta(params.pov.elevation);
+                povCamera.radius = params.pov.radius;
+
+                needsRender = true;
+                startRenderLoop();
+            }
+
+            // Update field dimensions
+            function updateField() {
+                if (field) {
+                    // Calculate scale factors
+                    const bbox = field.getBoundingInfo().boundingBox;
+                    field.scaling = new BABYLON.Vector3(
+                        params.field.width / (bbox.extendSize.x * 2),
+                        params.field.height / (bbox.extendSize.y * 2),
+                        params.field.length / (bbox.extendSize.z * 2)
+                    );
+
+                    // Update position to keep corner at origin
+                    field.position = new BABYLON.Vector3(
+                        params.field.width/2,
+                        params.field.height/2,
+                        params.field.length/2
+                    );
+
+                    // Update related visualizations
+                    createEdgeLines(scene);
+                    createFieldMarkings(scene);
+                    createFloorGrid(scene);
+
+                    // Update POV camera target
+                    updatePOVCamera();
+                }
+            }
+
+            // Define update functions mapping
+            const updateFunctions = {
+                updateField: updateField,
+                updateCameraPosition: updateCameraPosition,
+                updateCameraOrientation: updateCameraOrientation,
+                updateCameraFOV: updateCameraFOV,
+                updatePOVCamera: updatePOVCamera
+            };
+
+            // Share panel functionality
+            function setupSharePanel() {
+                const shareBtn = document.getElementById('shareURL');
+                const urlPopup = document.getElementById('urlPopup');
+                const configURL = document.getElementById('configURL');
+                const copyBtn = document.getElementById('copyURL');
+                const closeBtn = document.getElementById('closePopup');
+
+                // Show share URL panel
+                shareBtn.addEventListener('click', function() {
+                    configURL.value = generateShareableURL(params);
+                    urlPopup.style.display = 'block';
+                });
+
+                // Copy URL to clipboard
+                copyBtn.addEventListener('click', function() {
+                    configURL.select();
+                    document.execCommand('copy');
+                    this.textContent = 'Copied!';
+                    setTimeout(() => {
+                        this.textContent = 'Copy';
+                    }, 1500);
+                });
+
+                // Close URL panel
+                closeBtn.addEventListener('click', function() {
+                    urlPopup.style.display = 'none';
+                });
+
+                // Click outside to close
+                window.addEventListener('click', function(event) {
+                    if (event.target != urlPopup &&
+                        event.target != shareBtn &&
+                        !urlPopup.contains(event.target)) {
+                        urlPopup.style.display = 'none';
+                    }
+                });
+            }
+
+            // Setup all parameter sliders
+            function setupParameterSliders() {
+                parameterDefinitions.forEach(paramDef => {
+                    const slider = document.getElementById(`${paramDef.id}Slider`);
+                    const valueEl = document.getElementById(`${paramDef.id}Value`);
+
+                    if (slider && valueEl) {
+                        // Update slider position if value was set from URL parameter
+                        let currentValue;
+                        if (paramDef.fromInternal) {
+                            currentValue = paramDef.fromInternal(params[paramDef.group][paramDef.id]);
+                        } else {
+                            currentValue = params[paramDef.group][paramDef.id];
+                        }
+
+                        // Set slider to current value
+                        slider.value = currentValue;
+                        valueEl.textContent = formatParameterValue(currentValue, paramDef.format);
+
+                        // Add event listener for future changes
+                        slider.addEventListener("input", function() {
+                            const value = parseFloat(this.value);
+
+                            // Update display value
+                            valueEl.textContent = formatParameterValue(value, paramDef.format);
+
+                            // Update parameter value with conversion if needed
+                            if (paramDef.toInternal) {
+                                params[paramDef.group][paramDef.id] = paramDef.toInternal(value);
+                            } else {
+                                params[paramDef.group][paramDef.id] = value;
+                            }
+
+                            // Call the appropriate update function
+                            if (updateFunctions[paramDef.updateFn]) {
+                                updateFunctions[paramDef.updateFn]();
+                            }
+                        });
+                    }
+                });
+            }
+
+            // Handle control mode keys
+            function handleControlModeKeys(key) {
+                const relevantGroups = controlModeDefinitions.find(m => m.id === controlMode)?.parameterGroups || [];
+                const relevantParams = parameterDefinitions.filter(p => relevantGroups.includes(p.group));
+
+                // Find which standard control this key belongs to
+                let controlType = null;
+                let isIncrease = false;
+
+                for (const [type, config] of Object.entries(standardControls)) {
+                    if (config.keys.increase.toLowerCase() === key.toLowerCase()) {
+                        controlType = type;
+                        isIncrease = true;
+                        break;
+                    } else if (config.keys.decrease.toLowerCase() === key.toLowerCase()) {
+                        controlType = type;
+                        isIncrease = false;
+                        break;
+                    }
+                }
+
+                if (!controlType) return false;
+
+                // Find the parameter that uses this control type
+                const param = relevantParams.find(p => p.control === controlType);
+
+                if (param) {
+                    // Calculate delta
+                    const delta = isIncrease ? param.step : -param.step;
+
+                    // Get current value with conversion if needed
+                    let currentValue;
+                    if (param.fromInternal) {
+                        currentValue = param.fromInternal(params[param.group][param.id]);
+                    } else {
+                        currentValue = params[param.group][param.id];
+                    }
+
+                    // Calculate new value with bounds checking
+                    let newValue;
+
+                    // Special handling for azimuth parameter to enable wrapping
+                    if (param.id === "azimuth") {
+                        // Add delta and handle wrapping for 0-360 range
+                        newValue = (currentValue + delta + 360) % 360;
+                    } else {
+                        // Standard bounds checking for other parameters
+                        newValue = Math.min(param.max, Math.max(param.min, currentValue + delta));
+                    }
+
+                    // Update slider
+                    const slider = document.getElementById(`${param.id}Slider`);
+                    if (slider) {
+                        slider.value = newValue;
+                        const event = new Event('input', { bubbles: true });
+                        slider.dispatchEvent(event);
+                    }
+
+                    return true;
+                }
+
+                return false;
+            }
+
+            // Update control mode UI
+            function updateControlModeUI() {
+                // Update mode classes
+                const controlPanel = document.getElementById("controlPanel");
+                controlPanel.className = `mode-${controlMode}`;
+            }
+
+            // Toggle controls visibility
+            function toggleControlsVisibility() {
+                const panel = document.getElementById('controlPanel');
+                const hint = document.getElementById('toggleHint');
+
+                if (panel.style.display === 'none') {
+                    panel.style.display = 'block';
+                    hint.style.display = 'none';
+                } else {
+                    panel.style.display = 'none';
+                    hint.style.display = 'block';
+                    hint.textContent = 'Press SPACE to reveal controls';
+                }
+
+                needsRender = true;
+                startRenderLoop();
+            }
+
+            // Toggle URL sharing panel visibility
+            function toggleShareURLPanel() {
+                const urlPopup = document.getElementById('urlPopup');
+                const configURL = document.getElementById('configURL');
+
+                configURL.value = generateShareableURL(params);
+
+                if (urlPopup.style.display === 'none') {
+                    urlPopup.style.display = 'block';
+                } else {
+                    urlPopup.style.display = 'none';
+                }
+            }
+
+            // Efficient render loop
+            function startRenderLoop() {
+                if (!renderingActive) {
+                    renderingActive = true;
+                    renderFrame();
+                }
+
+                clearTimeout(idleTimeout);
+                idleTimeout = setTimeout(() => {
+                    renderingActive = false;
+                }, 1000);
+            }
+
+            function renderFrame() {
+                if (needsRender) {
+                    scene.render();
+                    needsRender = false;
+                }
+
+                if (renderingActive) {
+                    requestAnimationFrame(renderFrame);
+                }
+            }
+
+            // Create the scene
+            scene = createScene();
+
+            // Create initial vertical reference line
+            updateVerticalReferenceLine();
+
+            // Create initial field and elements
+            field = createField(scene);
+            createEdgeLines(scene);
+            createFieldMarkings(scene);
+            createFloorGrid(scene);
+
+            // Initialize camera orientation
+            updateCameraOrientation();
+
+            // Initialize camera FOV visualization
+            updateCameraFOV();
+
+            // Setup sliders
+            setupParameterSliders();
+
+            // Setup share URL functionality
+            setupSharePanel();
+
+            // Initialize control mode UI
+            updateControlModeUI();
+
+            // Toggle hint click handler
+            document.getElementById('toggleHint').addEventListener('click', toggleControlsVisibility);
+
+            // Keyboard event listener
+            window.addEventListener("keydown", function(event) {
+                // Handle spacebar for toggling controls
+                if (event.key === " " || event.code === "Space") {
+                    toggleControlsVisibility();
+                    event.preventDefault();
+                    return;
+                }
+
+                // Handle 't' key for toggling field opacity
+                if (event.key === "t" || event.key === "T") {
+                    toggleFieldOpacity();
+                    event.preventDefault();
+                    return;
+                }
+
+                // Handle 's' key for sharing URL
+                if (event.key === "s" || event.key === "S") {
+                    toggleShareURLPanel();
+                    event.preventDefault();
+                    return;
+                }
+
+                // Handle mode switching keys
+                const matchingMode = controlModeDefinitions.find(m => m.shortcut === event.key);
+                if (matchingMode) {
+                    controlMode = matchingMode.id;
+                    updateControlModeUI();
+                    event.preventDefault();
+                    return;
+                }
+
+                // Handle parameter control keys
+                if (handleControlModeKeys(event.key)) {
+                    event.preventDefault();
+                }
+            });
+
+            // Initial render
+            startRenderLoop();
+
+            // Handle browser resize
+            window.addEventListener("resize", function() {
+                engine.resize();
+                needsRender = true;
+                startRenderLoop();
+            });
+        }
+    </script>
+</body>
+</html>
